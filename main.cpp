@@ -434,6 +434,9 @@ struct Visitor
 
     virtual bool step_in_set(const TLV& tlv) = 0;
     virtual bool step_out_set(const TLV& tlv) = 0;
+
+    bool option_step_in_set = true;
+    bool option_step_in_sequence = true;
 };
 
 template <typename T>
@@ -556,7 +559,7 @@ struct Printer : public Visitor
     std::string indent;
 };
 
-template <typename T>
+template <typename Decoder>
 struct StructBuilder : public Visitor
 {
     bool step_boolean(const TLV& tlv) override
@@ -654,14 +657,13 @@ struct StructBuilder : public Visitor
     bool step_utc_time(const TLV& tlv) override
     {
         fprintf(stderr, "utc_time unimplemented!\n");
-        // struct_data_to_fill <<= aligned_sizeof<UTC_time>();
-        return false;
+        struct_data_to_fill <<= aligned_sizeof<UTC_time>();
+        return true;
     }
 
     bool step_nill(const TLV& tlv) override
     {
-        fprintf(stderr, "nill unimplemented!\n");
-        return false;
+        return true;
     }
 
     bool step_bit_string(const TLV& tlv) override
@@ -725,13 +727,11 @@ struct StructBuilder : public Visitor
 
     bool step_in_sequence(const TLV& tlv) override
     {
-        // fprintf(stderr, "sequence unimplemented!\n");
         return true;
     }
 
     bool step_out_sequence(const TLV& tlv) override
     {
-        // fprintf(stderr, "sequence unimplemented!\n");
         return true;
     }
 
@@ -746,28 +746,31 @@ struct StructBuilder : public Visitor
         // loop over all items in SET
         new (span_as<Set>(struct_data_to_fill)) Set();
         auto lexer = TLV_lexer(tlv.data);
-        while (auto result = lexer.pop<DER>())
+
+        // TODO: this feels off? We should have decoder here somehow.
+        while (auto result = lexer.pop<Decoder>())
         {
-            // result->dump();
             span_as<Set>(struct_data_to_fill)->items.push_back(*result);
         }
 
         struct_data_to_fill <<= aligned_sizeof<Set>();
-        fprintf(stderr, "TODO step_in_set!\n");
-        return false;
+        return true;
     }
 
     bool step_out_set(const TLV& tlv) override
     {
-        fprintf(stderr, "set unimplemented!\n");
-        return false;
+        // fprintf(stderr, "set unimplemented!\n");
+        return true;
     }
 
-    template <typename Decoder>
+    template <typename T>
     static std::unique_ptr<T> build(gsl::span<byte> data);
 
 private:
-    StructBuilder(gsl::span<byte> data) : struct_data_to_fill(data) {}
+    StructBuilder(gsl::span<byte> data) : struct_data_to_fill(data)
+    {
+        option_step_in_set = false;
+    }
 
     gsl::span<byte> struct_data_to_fill;
 };
@@ -929,40 +932,37 @@ bool start_visit(TLV tlv, Visitor& visitor)
         case Type::UTC_TIME:
             if (!visitor.step_utc_time(tlv)) return false;
             break;
-        case Type::SEQUENCE: {
+        case Type::SEQUENCE:
             if (!visitor.step_in_sequence(tlv)) return false;
 
-            // loop over all members of SEQUENCE
-            auto lexer = TLV_lexer(tlv.data);
-            while (auto result = lexer.pop<Decoder>())
+            if (visitor.option_step_in_sequence)
             {
-                if (!start_visit<Decoder>(*result, visitor)) return false;
+                // loop over all members of SEQUENCE
+                auto lexer = TLV_lexer(tlv.data);
+                while (auto result = lexer.pop<Decoder>())
+                {
+                    if (!start_visit<Decoder>(*result, visitor)) return false;
+                }
             }
 
             if (!visitor.step_out_sequence(tlv)) return false;
             break;
-        }
-        case Type::SET: {
+        case Type::SET:
             if (!visitor.step_in_set(tlv)) return false;
 
-            // if (struct_data_to_fill.size() < aligned_sizeof<Set>())
-            // {
-            //     fprintf(stderr, "Struct ended, but ASN1 not done, append: Set\n");
-            //     return false;
-            // }
-            // new (span_as<Set>(struct_data_to_fill)) Set();
-
-            // loop over all items in SET
-            auto lexer = TLV_lexer(tlv.data);
-            while (auto result = lexer.pop<Decoder>())
+            if (visitor.option_step_in_set)
             {
-                // span_as<Set>(struct_data_to_fill)->items.push_back(*result);
-                if (!start_visit<Decoder>(*result, visitor)) return false;
+                // loop over all items in SET
+                auto lexer = TLV_lexer(tlv.data);
+                while (auto result = lexer.pop<Decoder>())
+                {
+                    // span_as<Set>(struct_data_to_fill)->items.push_back(*result);
+                    if (!start_visit<Decoder>(*result, visitor)) return false;
+                }
             }
 
             if (!visitor.step_out_set(tlv)) return false;
             break;
-        }
         default:
             fprintf(stderr, "Got unimplemented tag: 0x%02x\n", tlv.tag);
             return false;
@@ -971,16 +971,16 @@ bool start_visit(TLV tlv, Visitor& visitor)
     return true;
 }
 
-template <typename T>
 template <typename Decoder>
-std::unique_ptr<T> StructBuilder<T>::build(gsl::span<byte> data)
+template <typename T>
+std::unique_ptr<T> StructBuilder<Decoder>::build(gsl::span<byte> data)
 {
     static_assert(std::is_standard_layout_v<T>, "Non standard layout not supported");
 
     auto mem = std::make_unique<byte[]>(sizeof(T));
     new (mem.get()) T();  // call constructor for memory?
 
-    StructBuilder<T> visitor{gsl::make_span(mem.get(), sizeof(T))};
+    StructBuilder<Decoder> visitor{gsl::make_span(mem.get(), sizeof(T))};
 
     if (!start_visit<Decoder>(DER::parse(data), visitor)) return nullptr;
 
@@ -1069,7 +1069,7 @@ int main()
                                2,    5,    8,    0x31, 6,    2,    1,    40,   2,    1,    50};
     b[1] = b.size() - 2;
 
-    auto ptr = ASN1::StructBuilder<SampleSeq>::build<DER>(b);
+    auto ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
     if (!ptr)
     {
         fprintf(stderr, "Failed to parse!\n");
@@ -1275,8 +1275,8 @@ int main()
         } NAME52;
     };
 
-    // auto tlv = DER::parse(bytes).value_as_tlv<DER>();  // unpack file desc
-    // auto dl = ASN1::parse<DER, DL>(tlv);
+    auto file = DER::parse(bytes);  // unpack file desc
+    auto dl = ASN1::StructBuilder<DER>::build<DL>(file.data);
 
     // std::array<byte, 2048> phantom;
     // auto span = gsl::make_span(phantom);
