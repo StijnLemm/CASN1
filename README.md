@@ -1,7 +1,8 @@
 # CASN1
-A library for reading ASN1 values. They kan be described directly using c++ syntax.
+A library for reading ASN1. They kan be described directly using c++ syntax.
 
 ``` cpp
+// define some sequence
 struct SampleSeq
 {
     ASN1::integer id;
@@ -21,5 +22,23 @@ auto b = std::vector<byte>{0x30, 0,    2,    1,    6,    2,    1,    9,    2,   
 b[1] = b.size() - 2;
 
 ASN1::Printer::run<DER>(b);
+/*
+Outputs:
+struct
+{
+        ASN1::integer integer0;
+        ASN1::integer integer1;
+        ASN1::integer integer2;
+        ASN1::boolean boolean3;
+        ASN1::Printable_string printable_string4;
+        ASN1::Octet_string octet_string5;
+        ASN1::Bit_string bit_string6;
+        ASN1::Set set7; // sets are more difficult. These can be an arbitrary sized list, with an arbitrary amount of items.
+                ASN1::integer integer8;
+                ASN1::integer integer9;
+} sequence10;
+*/
+
+
 std::unique_ptr<SampleSeq> ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
 ```
