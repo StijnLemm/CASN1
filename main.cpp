@@ -12,9 +12,6 @@
 
 #include "gsl/span_ext"
 
-#define REQUIRES(concept) typename = std::enable_if_t<concept>
-#define MEMBER_T(obj, member) decltype(((obj*)(nullptr))->member)
-
 #define HAS_BITS(v, mask) ((v & mask) == mask)
 
 using byte = unsigned char;
@@ -25,7 +22,7 @@ enum class endianness
     big = 1,
 };
 
-inline endianness get_system_endianness()
+static constexpr endianness get_system_endianness()
 {
     const int value{0x01};
     const void* address{static_cast<const void*>(&value)};
@@ -298,63 +295,6 @@ struct DER
     }
 };
 
-static inline std::vector<byte> fromHexString(std::string hex)
-{
-    assert(hex.length() % 2 == 0 && "Hex string must have an even number of chars!");
-    std::vector<byte> bytes;
-
-    for (unsigned int i = 0; i < hex.length(); i += 2)
-    {
-        std::string byteString = hex.substr(i, 2);
-        char byte = (char)strtol(byteString.c_str(), NULL, 16);
-        bytes.push_back(byte);
-    }
-
-    return bytes;
-}
-
-// template <typename Container>
-// struct ASN1_int
-// {
-//     ASN1_int()
-//     {
-//         static_cast<Container>(this)->set(10);
-//     }
-
-// bool parse(const TLV<DER>& tlv)
-// {
-//     tlv.dump();
-//     // todo this parser must be set somehow?
-//     auto data = tlv.value();
-//
-//     assert(data.len() <= sizeof(int));
-//     std::reverse_copy(data.begin(), data.end(), &fillMe);
-//     return tlv.tag == 2;
-// }
-// };
-
-// template <typename... Members>
-// struct ASN1
-// {
-//     ASN1(Members&... args)
-//     {
-//         bool result = true;
-//         ([&] { result &= Members::parse(); }(), ...);
-//
-//         assert(result);
-//     }
-// };
-
-//
-// namespace File
-// {
-
-// template <typename... Members>
-// void fill_asn(TLV root, Members&... members)
-// {
-//     ([&] { members = 10; }(), ...);
-// }
-
 namespace ASN1
 {
 
@@ -381,6 +321,9 @@ enum class Type
 
 using integer = int64_t;
 using boolean = bool;
+
+// all structs which have to deallocate memory after creation need some tag, to be sure we fill them
+// correctly and on the right spot. This will fix the safety issue we are facing now.
 using Octet_string = std::vector<byte>;
 using Printable_string = std::string;
 
@@ -396,14 +339,6 @@ struct Set
     constexpr std::unique_ptr<T> as_at(const size_t index);
     std::vector<TLV> items;
 };
-
-// template <byte Tag, typename T>
-// struct context_specific
-// {
-//     static_assert(Tag & 0b10000000, "Context specific tag must be ");
-//     const byte tag = Tag;
-//     T data;
-// };
 
 struct OID
 {
@@ -540,6 +475,10 @@ struct Printer : public Visitor
         return true;
     }
 
+    template <typename Decoder>
+    static void run(gsl::span<byte> data);
+
+private:
     void add_indent()
     {
         indent = indent + "\t";
@@ -554,9 +493,6 @@ struct Printer : public Visitor
     {
         return uuid++;
     }
-
-    template <typename Decoder>
-    static void run(gsl::span<byte> data);
 
     int uuid = 0;
     std::string indent;
@@ -750,7 +686,6 @@ struct StructBuilder : public Visitor
         new (span_as<Set>(struct_data_to_fill)) Set();
         auto lexer = TLV_lexer(tlv.data);
 
-        // TODO: this feels off? We should have decoder here somehow.
         while (auto result = lexer.pop<Decoder>())
         {
             span_as<Set>(struct_data_to_fill)->items.push_back(*result);
@@ -762,7 +697,6 @@ struct StructBuilder : public Visitor
 
     bool step_out_set(const TLV& tlv) override
     {
-        // fprintf(stderr, "set unimplemented!\n");
         return true;
     }
 
@@ -778,133 +712,14 @@ private:
     gsl::span<byte> struct_data_to_fill;
 };
 
-// template <typename T>
-// bool fill_asn(const TLV& tlv, gsl::span<byte>& struct_data_to_fill)
-// {
-//     if (struct_data_to_fill.size() < aligned_sizeof<T>())
-//     {
-//         fprintf(stderr, "Struct ended, but ASN1 not done, append: %s\n", typeid(T).name());
-//         return false;
-//     }
-//
-//     if (tlv.data.size() > aligned_sizeof<T>())
-//     {
-//         return false;
-//     }
-//
-//     std::fill(struct_data_to_fill.begin(), struct_data_to_fill.begin() + aligned_sizeof<T>(), 0);
-//     std::reverse_copy(tlv.data.begin(), tlv.data.end(), struct_data_to_fill.begin());
-//     struct_data_to_fill <<= aligned_sizeof<T>();
-//     return true;
-// }
-
-// template <>
-// bool fill_asn<Octet_string>(const TLV& tlv, gsl::span<byte>& struct_data_to_fill)
-// {
-//     if (struct_data_to_fill.size() < aligned_sizeof<Octet_string>())
-//     {
-//         fprintf(stderr, "Struct ended, but ASN1 not done, append: octet_string\n");
-//         return false;
-//     }
-//
-//     new (span_as<Octet_string>(struct_data_to_fill)) Octet_string(tlv.data.begin(),
-//     tlv.data.end()); struct_data_to_fill <<= aligned_sizeof<Octet_string>(); return true;
-// }
-
-// template <>
-// bool fill_asn<Printable_string>(const TLV& tlv, gsl::span<byte>& struct_data_to_fill)
-// {
-//     if (struct_data_to_fill.size() < aligned_sizeof<Printable_string>())
-//     {
-//         fprintf(stderr, "Struct ended, but ASN1 not done, append: printable_string\n");
-//         return false;
-//     }
-//
-//     new (span_as<Printable_string>(struct_data_to_fill))
-//         Printable_string(tlv.data.begin(), tlv.data.end());
-//     struct_data_to_fill <<= aligned_sizeof<Printable_string>();
-//     return true;
-// }
-
-// template <>
-// bool fill_asn<OID>(const TLV& tlv, gsl::span<byte>& struct_data_to_fill)
-// {
-//     if (struct_data_to_fill.size() < aligned_sizeof<OID>())
-//     {
-//         fprintf(stderr, "Struct ended, but ASN1 not done, append: oid\n");
-//         return false;
-//     }
-//
-//     if (struct_data_to_fill.empty())
-//     {
-//         fprintf(stderr, "Invalid oid, length 0\n");
-//         return false;
-//     }
-//
-//     new (span_as<OID>(struct_data_to_fill)) OID{Printable_string(tlv.data.begin(),
-//     tlv.data.end())}; Printable_string& str = span_as<OID>(struct_data_to_fill)->oid;
-//     str.reserve(15);
-//
-//     auto iter = tlv.data.begin();
-//     const byte front = *iter++;
-//     str += std::to_string(front / 40) + "." + std::to_string(front % 40);
-//
-//     while (iter != tlv.data.end())
-//     {
-//         size_t value = (*iter & 0b01111111);
-//         while (HAS_BITS(*iter, 0b10000000))
-//         {
-//             if (iter >= tlv.data.end() - 1)
-//             {
-//                 fprintf(stderr, "Bad oid encoding!");
-//                 return false;
-//             }
-//
-//             value <<= 7;
-//             value += (*++iter & 0b01111111);
-//         }
-//
-//         str += "." + std::to_string(value);
-//         iter++;
-//     }
-//
-//     struct_data_to_fill <<= aligned_sizeof<OID>();
-//     return true;
-// }
-
-// template <>
-// bool fill_asn<Bit_string>(const TLV& tlv, gsl::span<byte>& struct_data_to_fill)
-// {
-//     if (struct_data_to_fill.size() < aligned_sizeof<Octet_string>() + aligned_sizeof<integer>())
-//     {
-//         fprintf(stderr, "Struct ended, but ASN1 not done, append: bit_string\n");
-//         return false;
-//     }
-//
-//     if (tlv.data.size() < 1)
-//     {
-//         return false;
-//     }
-//
-//     // set unused bits
-//     new (span_as<integer>(struct_data_to_fill)) integer{tlv.data.front()};
-//     struct_data_to_fill <<= aligned_sizeof<integer>();
-//
-//     new (span_as<Octet_string>(struct_data_to_fill)) Octet_string(tlv.data.begin() + 1,
-//     tlv.data.end()); struct_data_to_fill <<= aligned_sizeof<Octet_string>(); return true;
-// }
-
 template <typename Decoder>
 bool start_visit(TLV tlv, Visitor& visitor)
 {
     if ((tlv.tag & 0b10000000))
     {
-        // tlv.dump();
         // fprintf(stderr, "Found context specific tag: 0x%02x\n", tlv.tag);
         tlv = tlv.value_as_tlv<Decoder>();
     }
-
-    // tlv.dump();
 
     switch (static_cast<Type>(tlv.tag))
     {
@@ -959,7 +774,6 @@ bool start_visit(TLV tlv, Visitor& visitor)
                 auto lexer = TLV_lexer(tlv.data);
                 while (auto result = lexer.pop<Decoder>())
                 {
-                    // span_as<Set>(struct_data_to_fill)->items.push_back(*result);
                     if (!start_visit<Decoder>(*result, visitor)) return false;
                 }
             }
@@ -1006,51 +820,6 @@ std::unique_ptr<T> StructBuilder<Decoder>::build(gsl::span<byte> data)
     return std::unique_ptr<T>((T*)mem.release());
 }
 
-// template <typename Decoder, typename T>
-// std::unique_ptr<T> parse(const TLV& tlv)
-// {
-//     static_assert(std::is_standard_layout_v<T>, "Non standard layout not supported");
-//
-//     // TODO: destructors will fail miserably if parsing fails. we need to allocate the memory for
-//     T
-//     // for parsing, then interpret memory as T.
-//     auto mem = std::make_unique<byte[]>(sizeof(T));
-//     new (mem.get()) T();
-//
-//     auto to_fill = gsl::make_span(mem.get(), sizeof(T));
-//     if (!fill<Decoder>(tlv, to_fill)) return nullptr;
-//
-//     if (!to_fill.empty())
-//     {
-//         fprintf(
-//             stderr,
-//             "Warning: not the complete struct is filled, struct is %zu bytes bigger than ASN1\n",
-//             to_fill.size());
-//     }
-//
-//     // release the successfully parsed memory as the struct.
-//     return std::unique_ptr<T>((T*)mem.release());
-// }
-
-// template <typename Decoder, typename T>
-// constexpr std::unique_ptr<T> Set::as_at(const size_t index)
-// {
-//     if (items.size() <= index)
-//     {
-//         fprintf(stderr, "Index out of bounds!\n");
-//         return nullptr;
-//     }
-//
-//     const TLV& item = items[index];
-//     if (sizeof(T) < item.data.size())
-//     {
-//         fprintf(stderr, "Size of item does not match!\n");
-//         return nullptr;
-//     }
-//
-//     return parse<Decoder, T>(item);
-// }
-
 }  // namespace ASN1
 
 struct Point
@@ -1070,6 +839,21 @@ struct SampleSeq
     ASN1::Bit_string bit_str;
     ASN1::Set ints;
 };
+
+static inline std::vector<byte> fromHexString(std::string hex)
+{
+    assert(hex.length() % 2 == 0 && "Hex string must have an even number of chars!");
+    std::vector<byte> bytes;
+
+    for (unsigned int i = 0; i < hex.length(); i += 2)
+    {
+        std::string byteString = hex.substr(i, 2);
+        char byte = (char)strtol(byteString.c_str(), NULL, 16);
+        bytes.push_back(byte);
+    }
+
+    return bytes;
+}
 
 int main()
 {
