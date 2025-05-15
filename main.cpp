@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <gsl/span>
-#include <iterator>
 #include <memory>
 #include <string>
 #include <type_traits>
