@@ -555,6 +555,9 @@ struct Printer : public Visitor
         return uuid++;
     }
 
+    template <typename Decoder>
+    static void run(gsl::span<byte> data);
+
     int uuid = 0;
     std::string indent;
 };
@@ -972,6 +975,13 @@ bool start_visit(TLV tlv, Visitor& visitor)
 }
 
 template <typename Decoder>
+void Printer::run(gsl::span<byte> data)
+{
+    Printer p;
+    start_visit<Decoder>(Decoder::parse(data), p);
+}
+
+template <typename Decoder>
 template <typename T>
 std::unique_ptr<T> StructBuilder<Decoder>::build(gsl::span<byte> data)
 {
@@ -1069,7 +1079,9 @@ int main()
                                2,    5,    8,    0x31, 6,    2,    1,    40,   2,    1,    50};
     b[1] = b.size() - 2;
 
+    ASN1::Printer::run<DER>(b);
     auto ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
+
     if (!ptr)
     {
         fprintf(stderr, "Failed to parse!\n");
