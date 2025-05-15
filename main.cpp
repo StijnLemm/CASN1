@@ -145,25 +145,39 @@ using boolean = bool;
 
 // all structs which have to deallocate memory after creation need some tag, to be sure we fill them
 // correctly and on the right spot. This will fix the safety issue we are facing now.
-using Octet_string = std::vector<byte>;
-using Printable_string = std::string;
+
+struct Octet_string
+{
+    Type tag = Type::OCTET_STRING;
+    std::vector<byte> data;
+};
+
+struct Printable_string
+{
+    Type tag = Type::PRINTABLE_STRING;
+    std::string text;
+};
 
 struct Bit_string
 {
+    Type tag = Type::BIT_STRING;
     integer unused_bits;
-    Octet_string data;
+    std::vector<byte> data;
 };
 
 struct Set
 {
     template <typename Decoder, typename T>
     constexpr std::unique_ptr<T> as_at(const size_t index);
+
+    const Type tag = Type::SET;
     std::vector<TLV> items;
 };
 
 struct OID
 {
-    Printable_string oid;  // TODO: do thing
+    Type tag = Type::OID;
+    std::string text;
 };
 
 struct UTC_time
@@ -199,6 +213,12 @@ template <typename T>
 static constexpr void operator<<=(gsl::span<T>& span, size_t amount)
 {
     span = span.last(span.size() - amount);
+}
+
+template <typename T>
+static constexpr gsl::span<T> operator<<(const gsl::span<T>& span, size_t amount)
+{
+    return span.last(span.size() - amount);
 }
 
 template <typename T>
@@ -382,9 +402,8 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        new (span_as<OID>(struct_data_to_fill))
-            OID{Printable_string(tlv.data.begin(), tlv.data.end())};
-        Printable_string& str = span_as<OID>(struct_data_to_fill)->oid;
+        // TODO: MUST CHECK IF TAG BYTE IS THERE.
+        std::string& str = span_as<OID>(struct_data_to_fill)->text;
         str.reserve(15);
 
         auto iter = tlv.data.begin();
@@ -444,10 +463,8 @@ struct StructBuilder : public Visitor
         new (span_as<integer>(struct_data_to_fill)) integer{tlv.data.front()};
         struct_data_to_fill <<= aligned_sizeof<integer>();
 
-        new (span_as<Octet_string>(struct_data_to_fill))
-            Octet_string(tlv.data.begin() + 1, tlv.data.end());
-        struct_data_to_fill <<= aligned_sizeof<Octet_string>();
-        return true;
+        // now we have a double check.
+        return step_octet_string(TLV{tlv.tag, tlv.data << 1});
     }
 
     bool step_octet_string(const TLV& tlv) override
@@ -458,8 +475,10 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        new (span_as<Octet_string>(struct_data_to_fill))
-            Octet_string(tlv.data.begin(), tlv.data.end());
+        // TODO: MUST CHECK IF TAG BYTE IS THERE.
+        span_as<Octet_string>(struct_data_to_fill)->data =
+            std::vector<byte>(tlv.data.begin(), tlv.data.end());
+
         struct_data_to_fill <<= aligned_sizeof<Octet_string>();
         return true;
     }
@@ -472,8 +491,10 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        new (span_as<Printable_string>(struct_data_to_fill))
-            Printable_string(tlv.data.begin(), tlv.data.end());
+        // TODO: MUST CHECK IF TAG BYTE IS THERE.
+        span_as<Printable_string>(struct_data_to_fill)->text =
+            std::string(tlv.data.begin(), tlv.data.end());
+
         struct_data_to_fill <<= aligned_sizeof<Printable_string>();
         return true;
     }
@@ -946,12 +967,13 @@ int main()
     };
 
     // check the hash fields
-    ASN1::Printer::run<DER>(dl->sequence68.sequence5.octet_string4);
-    auto a = ASN1::StructBuilder<DER>::build<HashGroup>(dl->sequence68.sequence5.octet_string4);
+    ASN1::Printer::run<DER>(dl->sequence68.sequence5.octet_string4.data);
+    auto a =
+        ASN1::StructBuilder<DER>::build<HashGroup>(dl->sequence68.sequence5.octet_string4.data);
 
-    printf("iod: %s\n", dl->oid0.oid.c_str());
+    printf("iod: %s\n", dl->oid0.text.c_str());
 
-    for (byte b : a->sequence24.sequence23.octet_string22)
+    for (byte b : a->sequence24.sequence23.octet_string22.data)
     {
         printf("0x%02x ", b);
     }
