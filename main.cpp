@@ -435,7 +435,7 @@ struct Visitor
     virtual bool step_in_set(const TLV& tlv) = 0;
     virtual bool step_out_set(const TLV& tlv) = 0;
 
-    bool option_step_in_set = true;
+    bool option_step_in_set = false;
     bool option_step_in_sequence = true;
 };
 
@@ -1079,8 +1079,8 @@ int main()
                                2,    5,    8,    0x31, 6,    2,    1,    40,   2,    1,    50};
     b[1] = b.size() - 2;
 
-    ASN1::Printer::run<DER>(b);
-    auto ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
+    // ASN1::Printer::run<DER>(b);
+    std::unique_ptr<SampleSeq> ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
 
     if (!ptr)
     {
@@ -1088,8 +1088,9 @@ int main()
         return 1;
     }
 
-    fprintf(stderr, "id: %lld, num: %lld, inner: %lld, bool: %d, str: %s, unused: %lld\n", ptr->id,
-            ptr->num, ptr->extra, ptr->b, ptr->printable_str.c_str(), ptr->bit_str.unused_bits);
+    // fprintf(stderr, "id: %lld, num: %lld, inner: %lld, bool: %d, str: %s, unused: %lld\n",
+    // ptr->id,
+    //         ptr->num, ptr->extra, ptr->b, ptr->printable_str.c_str(), ptr->bit_str.unused_bits);
 
     // auto result = ptr->ints.as_at<DER, ASN1::integer>(0);
     // fprintf(stderr, "set item 1: %lld\n", *result);
@@ -1164,193 +1165,191 @@ int main()
         char filler[2560];
     };
 
+    auto file = DER::parse(bytes);  // unpack file desc
+
     struct DL
     {
-        ASN1::OID oid;
+        ASN1::OID oid0;
         struct
         {
-            ASN1::integer NAME0;
-            ASN1::Set NAME1;
+            ASN1::integer integer1;
+            ASN1::Set set2;
             struct
             {
-                ASN1::OID oid;
-                ASN1::Octet_string NAME2;
-            } NAME3;
+                ASN1::OID oid3;
+                ASN1::Octet_string octet_string4;
+            } sequence5;
             struct
             {
                 struct
                 {
-                    ASN1::integer NAME4;
-                    ASN1::integer NAME5;
+                    ASN1::integer integer6;
+                    ASN1::integer integer7;
                     struct
                     {
-                        ASN1::OID oid;
+                        ASN1::OID oid8;
                         struct
                         {
                             struct
                             {
-                                ASN1::OID oid;
-                            } NAME6;
+                                ASN1::OID oid9;
+                            } sequence10;
                             struct
                             {
-                                ASN1::OID oid;
+                                ASN1::OID oid11;
                                 struct
                                 {
-                                    ASN1::OID oid;
-                                } NAME7;
-                            } NAME8;
-                            ASN1::integer NAME9;
-                        } NAME10;
-                    } NAME11;
+                                    ASN1::OID oid12;
+                                } sequence13;
+                            } sequence14;
+                            ASN1::integer integer15;
+                        } sequence16;
+                    } sequence17;
                     struct
                     {
-                        ASN1::Set NAME12;
-                        ASN1::Set NAME13;
-                        ASN1::Set NAME14;
-                        ASN1::Set NAME15;
-                        ASN1::Set NAME16;
-                    } NAME17;
+                        ASN1::Set set18;
+                        ASN1::Set set19;
+                        ASN1::Set set20;
+                        ASN1::Set set21;
+                        ASN1::Set set22;
+                    } sequence23;
                     struct
                     {
-                        ASN1::UTC_time NAME18;
-                        ASN1::UTC_time NAME19;
-                    } NAME20;
+                        ASN1::UTC_time utc_time24;
+                        ASN1::UTC_time utc_time25;
+                    } sequence26;
                     struct
                     {
-                        ASN1::Set NAME21;
-                        ASN1::Set NAME22;
-                        ASN1::Set NAME23;
-                        ASN1::Set NAME24;
-                        ASN1::Set NAME25;
-                    } NAME26;
-                    struct
-                    {
-                        struct
-                        {
-                            ASN1::OID oid;
-                        } NAME27;
-                        ASN1::Bit_string NAME28;
-                    } NAME29;
+                        ASN1::Set set27;
+                        ASN1::Set set28;
+                        ASN1::Set set29;
+                        ASN1::Set set30;
+                        ASN1::Set set31;
+                    } sequence32;
                     struct
                     {
                         struct
                         {
-                            ASN1::OID oid;
-                            ASN1::Octet_string NAME30;
-                        } NAME31;
+                            ASN1::OID oid33;
+                        } sequence34;
+                        ASN1::Bit_string bit_string35;
+                    } sequence36;
+                    struct
+                    {
                         struct
                         {
-                            ASN1::OID oid;
-                            ASN1::Octet_string NAME32;
-                        } NAME33;
+                            ASN1::OID oid37;
+                            ASN1::Octet_string octet_string38;
+                        } sequence39;
                         struct
                         {
-                            ASN1::OID oid;
-                            ASN1::Octet_string NAME34;
-                        } NAME35;
+                            ASN1::OID oid40;
+                            ASN1::Octet_string octet_string41;
+                        } sequence42;
                         struct
                         {
-                            ASN1::OID oid;
-                            ASN1::Octet_string NAME36;
-                        } NAME37;
+                            ASN1::OID oid43;
+                            ASN1::Octet_string octet_string44;
+                        } sequence45;
                         struct
                         {
-                            ASN1::OID oid;
-                            ASN1::boolean NAME38;
-                            ASN1::Octet_string NAME39;
-                        } NAME40;
-                    } NAME41;
-                } NAME42;
+                            ASN1::OID oid46;
+                            ASN1::Octet_string octet_string47;
+                        } sequence48;
+                        struct
+                        {
+                            ASN1::OID oid49;
+                            ASN1::boolean boolean50;
+                            ASN1::Octet_string octet_string51;
+                        } sequence52;
+                    } sequence53;
+                } sequence54;
                 struct
                 {
-                    ASN1::OID oid;
+                    ASN1::OID oid55;
                     struct
                     {
                         struct
                         {
-                            ASN1::OID oid;
-                        } NAME43;
+                            ASN1::OID oid56;
+                        } sequence57;
                         struct
                         {
-                            ASN1::OID oid;
+                            ASN1::OID oid58;
                             struct
                             {
-                                ASN1::OID oid;
-                            } NAME44;
-                        } NAME45;
-                        ASN1::integer NAME46;
-                    } NAME47;
-                } NAME48;
-                ASN1::Bit_string NAME49;
-            } NAME50;
-            ASN1::Set NAME51;
-        } NAME52;
+                                ASN1::OID oid59;
+                            } sequence60;
+                        } sequence61;
+                        ASN1::integer integer62;
+                    } sequence63;
+                } sequence64;
+                ASN1::Bit_string bit_string65;
+            } sequence66;
+            ASN1::Set set67;
+        } sequence68;
     };
 
-    auto file = DER::parse(bytes);  // unpack file desc
+    ASN1::Printer::run<DER>(file.data);
     auto dl = ASN1::StructBuilder<DER>::build<DL>(file.data);
-
-    // std::array<byte, 2048> phantom;
-    // auto span = gsl::make_span(phantom);
-    // ASN1::Printer p;
-    // ASN1::start_visit<DER>(tlv, span, p);
 
     struct HashGroup
     {
-        ASN1::integer NAME54;
+        ASN1::integer integer0;
         struct
         {
-            ASN1::OID oid;
-        } NAME55;
+            ASN1::OID oid1;
+        } sequence2;
         struct
         {
             struct
             {
-                ASN1::integer NAME56;
-                ASN1::Octet_string NAME57;
-            } NAME58;
+                ASN1::integer integer3;
+                ASN1::Octet_string octet_string4;
+            } sequence5;
             struct
             {
-                ASN1::integer NAME59;
-                ASN1::Octet_string NAME60;
-            } NAME61;
+                ASN1::integer integer6;
+                ASN1::Octet_string octet_string7;
+            } sequence8;
             struct
             {
-                ASN1::integer NAME62;
-                ASN1::Octet_string NAME63;
-            } NAME64;
+                ASN1::integer integer9;
+                ASN1::Octet_string octet_string10;
+            } sequence11;
             struct
             {
-                ASN1::integer NAME65;
-                ASN1::Octet_string NAME66;
-            } NAME67;
+                ASN1::integer integer12;
+                ASN1::Octet_string octet_string13;
+            } sequence14;
             struct
             {
-                ASN1::integer NAME68;
-                ASN1::Octet_string NAME69;
-            } NAME70;
+                ASN1::integer integer15;
+                ASN1::Octet_string octet_string16;
+            } sequence17;
             struct
             {
-                ASN1::integer NAME71;
-                ASN1::Octet_string NAME72;
-            } NAME73;
+                ASN1::integer integer18;
+                ASN1::Octet_string octet_string19;
+            } sequence20;
             struct
             {
-                ASN1::integer NAME74;
-                ASN1::Octet_string NAME75;
-            } NAME76;
-        } NAME77;
+                ASN1::integer integer21;
+                ASN1::Octet_string octet_string22;
+            } sequence23;
+        } sequence24;
     };
 
     // check the hash fields
-    // auto a = ASN1::parse<DER, HashGroup>(DER::parse(dl->NAME52.NAME3.NAME2));
+    ASN1::Printer::run<DER>(dl->sequence68.sequence5.octet_string4);
+    auto a = ASN1::StructBuilder<DER>::build<HashGroup>(dl->sequence68.sequence5.octet_string4);
 
-    // printf("iod: %s\n", dl->oid.oid.c_str());
-    //
-    // for (byte b : a->NAME77.NAME64.NAME63)
-    // {
-    //     printf("0x%02x ", b);
-    // }
+    printf("iod: %s\n", dl->oid0.oid.c_str());
+
+    for (byte b : a->sequence24.sequence23.octet_string22)
+    {
+        printf("0x%02x ", b);
+    }
 
     return 0;
 }
