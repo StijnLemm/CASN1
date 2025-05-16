@@ -152,6 +152,12 @@ struct Octet_string
     std::vector<byte> data;
 };
 
+struct Utf8_string
+{
+    Type tag = Type::UTF8_STRING;
+    std::wstring text;
+};
+
 struct Printable_string
 {
     Type tag = Type::PRINTABLE_STRING;
@@ -358,6 +364,14 @@ struct StructBuilder : public Visitor
             return false;
         }
 
+        if (struct_data_to_fill[0] != 0)
+        {
+            fprintf(stderr,
+                    "Struct or ASN1 corrupt, found tag: %d in struct and boolean in ASN1!\n",
+                    struct_data_to_fill[0]);
+            return false;
+        }
+
         std::fill(struct_data_to_fill.begin(),
                   struct_data_to_fill.begin() + aligned_sizeof<boolean>(), 0);
         std::reverse_copy(tlv.data.begin(), tlv.data.end(), struct_data_to_fill.begin());
@@ -378,6 +392,14 @@ struct StructBuilder : public Visitor
         {
             fprintf(stderr, "TLV data is larger (%zu bytes) than integer struct field!\n",
                     tlv.data.size());
+            return false;
+        }
+
+        if (struct_data_to_fill[0] != 0)
+        {
+            fprintf(stderr,
+                    "Struct or ASN1 corrupt, found tag: %d in struct and integer in ASN1!\n",
+                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -402,7 +424,13 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        // TODO: MUST CHECK IF TAG BYTE IS THERE.
+        if (struct_data_to_fill[0] != static_cast<byte>(Type::OID))
+        {
+            fprintf(stderr, "Struct or ASN1 corrupt, found tag: %d in struct and oid in ASN1!\n",
+                    struct_data_to_fill[0]);
+            return false;
+        }
+
         std::string& str = span_as<OID>(struct_data_to_fill)->text;
         str.reserve(15);
 
@@ -459,12 +487,24 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        // set unused bits
-        new (span_as<integer>(struct_data_to_fill)) integer{tlv.data.front()};
-        struct_data_to_fill <<= aligned_sizeof<integer>();
+        if (struct_data_to_fill[0] != static_cast<byte>(Type::BIT_STRING))
+        {
+            fprintf(stderr,
+                    "Struct or ASN1 corrupt, found tag: %d in struct and Bit_string in ASN1!\n",
+                    struct_data_to_fill[0]);
+            return false;
+        }
 
-        // now we have a double check.
-        return step_octet_string(TLV{tlv.tag, tlv.data << 1});
+        // set unused bits
+        span_as<Bit_string>(struct_data_to_fill)->unused_bits = tlv.data.front();
+
+        // TODO: maybe use std::copy here.
+        auto shifted = tlv.data << 1;
+        span_as<Bit_string>(struct_data_to_fill)->data =
+            std::vector<byte>(shifted.begin(), shifted.end());
+
+        struct_data_to_fill <<= aligned_sizeof<Bit_string>();
+        return true;
     }
 
     bool step_octet_string(const TLV& tlv) override
@@ -475,7 +515,14 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        // TODO: MUST CHECK IF TAG BYTE IS THERE.
+        if (struct_data_to_fill[0] != static_cast<byte>(Type::OCTET_STRING))
+        {
+            fprintf(stderr,
+                    "Struct or ASN1 corrupt, found tag: %d in struct and Octet_string in ASN1!\n",
+                    struct_data_to_fill[0]);
+            return false;
+        }
+
         span_as<Octet_string>(struct_data_to_fill)->data =
             std::vector<byte>(tlv.data.begin(), tlv.data.end());
 
@@ -491,7 +538,15 @@ struct StructBuilder : public Visitor
             return false;
         }
 
-        // TODO: MUST CHECK IF TAG BYTE IS THERE.
+        if (struct_data_to_fill[0] != static_cast<byte>(Type::PRINTABLE_STRING))
+        {
+            fprintf(
+                stderr,
+                "Struct or ASN1 corrupt, found tag: %d in struct and Printable_string in ASN1!\n",
+                struct_data_to_fill[0]);
+            return false;
+        }
+
         span_as<Printable_string>(struct_data_to_fill)->text =
             std::string(tlv.data.begin(), tlv.data.end());
 
@@ -501,9 +556,25 @@ struct StructBuilder : public Visitor
 
     bool step_utf8_string(const TLV& tlv) override
     {
-        fprintf(stderr, "utf8_string unimplemented!\n");
-        // struct_data_to_fill <<= aligned_sizeof<Printable_string>();
-        return false;
+        if (struct_data_to_fill.size() < aligned_sizeof<Utf8_string>())
+        {
+            fprintf(stderr, "Struct ended, but ASN1 not done, append: Utf8_string\n");
+            return false;
+        }
+
+        if (struct_data_to_fill[0] != static_cast<byte>(Type::UTF8_STRING))
+        {
+            fprintf(stderr,
+                    "Struct or ASN1 corrupt, found tag: %d in struct and Utf8_string in ASN1!\n",
+                    struct_data_to_fill[0]);
+            return false;
+        }
+
+        span_as<Utf8_string>(struct_data_to_fill)->text =
+            std::wstring(tlv.data.begin(), tlv.data.end());
+
+        struct_data_to_fill <<= aligned_sizeof<Utf8_string>();
+        return true;
     }
 
     bool step_in_sequence(const TLV& tlv) override
@@ -521,6 +592,13 @@ struct StructBuilder : public Visitor
         if (struct_data_to_fill.size() < aligned_sizeof<Set>())
         {
             fprintf(stderr, "Struct ended, but ASN1 not done, append: Set\n");
+            return false;
+        }
+
+        if (struct_data_to_fill[0] != static_cast<byte>(Type::SET))
+        {
+            fprintf(stderr, "Struct or ASN1 corrupt, found tag: %d in struct and Set in ASN1!\n",
+                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -705,7 +783,7 @@ int main()
                                2,    5,    8,    0x31, 6,    2,    1,    40,   2,    1,    50};
     b[1] = b.size() - 2;
 
-    // ASN1::Printer::run<DER>(b);
+    ASN1::Printer::run<DER>(b);
     std::unique_ptr<SampleSeq> ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
 
     if (!ptr)
@@ -967,7 +1045,7 @@ int main()
     };
 
     // check the hash fields
-    ASN1::Printer::run<DER>(dl->sequence68.sequence5.octet_string4.data);
+    // ASN1::Printer::run<DER>(dl->sequence68.sequence5.octet_string4.data);
     auto a =
         ASN1::StructBuilder<DER>::build<HashGroup>(dl->sequence68.sequence5.octet_string4.data);
 
