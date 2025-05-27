@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -8,11 +9,40 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <variant>
 #include <vector>
+
+using namespace std::string_literals;
 
 #include "gsl/span_ext"
 
 #define HAS_BITS(v, mask) ((v & mask) == mask)
+
+template <typename V, typename E>
+class Result
+{
+public:
+    /* implicit */ constexpr Result(V v) : _variant(v) {}
+    /* implicit */ constexpr Result(E e) : _variant(e) {}
+
+    constexpr V& unwrap()
+    {
+        return std::get<V>(_variant);
+    }
+
+    constexpr const E& unwrap_err() const
+    {
+        return std::get<E>(_variant);
+    }
+
+    constexpr operator bool() const
+    {
+        return std::holds_alternative<V>(_variant);
+    }
+
+private:
+    std::variant<V, E> _variant;
+};
 
 using byte = unsigned char;
 
@@ -47,7 +77,7 @@ struct TLV
     }
 
     template <typename Decoder>
-    constexpr TLV value_as_tlv() const
+    constexpr auto value_as_tlv() const
     {
         return Decoder::parse(data);
     }
@@ -56,19 +86,31 @@ struct TLV
     gsl::span<byte> data;
 };
 
-struct TLV_lexer
+// TODO: should we return a string as error to keep the decoder interface flexible? Or should there
+// be a generic enum for all error return codes?
+using TLVResult = Result<TLV, std::string>;
+
+struct TLVLexer
 {
-    TLV_lexer(gsl::span<byte> buffer) : head(buffer.begin()), buffer(buffer) {}
+    TLVLexer(gsl::span<byte> buffer) : head(buffer.begin()), buffer(buffer) {}
 
     template <typename Decoder>
     constexpr std::optional<TLV> pop()
     {
         if (head == buffer.end()) return {};
-        auto tlv = Decoder::parse(buffer.last(buffer.end() - head));
 
-        // have to go unsafe because the containers are different here.
-        head.current_ = tlv.data.end().current_;
-        return tlv;
+        if (TLVResult result = Decoder::parse(buffer.last(buffer.end() - head)))
+        {
+            const auto& tlv = result.unwrap();
+            // have to go unsafe gsl iter because the containers are different here.
+            head.current_ = tlv.data.end().current_;
+            return tlv;
+        }
+        else
+        {
+            fprintf(stderr, "Failed to parse while lexing: %s", result.unwrap_err().c_str());
+            return {};
+        }
     }
 
     gsl::span<byte>::iterator head;
@@ -82,9 +124,12 @@ struct DER
 
     using tag_type = byte;
 
-    static constexpr TLV parse(gsl::span<byte> bytes)
+    static TLVResult parse(gsl::span<byte> bytes)
     {
-        assert(bytes.size() >= 2 && "TODO parsing errors");
+        if (bytes.size() < 2)
+        {
+            return "TLV must be at least a size of 2"s;
+        }
 
         if (!HAS_BITS(bytes[1], EXTENDED_LEN_MARKER))
         {
@@ -111,7 +156,11 @@ struct DER
             std::copy(&bytes[2], &bytes[2 + len_field_size], (byte*)&len);
         }
 
-        assert(len + 2 < bytes.size() && "TODO parsing errors");
+        if (len + 2 >= bytes.size())
+        {
+            return "TLV provided size was larger than buffer"s;
+        }
+
         return TLV{bytes[0], bytes.subspan(len_field_size + 2, len)};
     }
 };
@@ -239,6 +288,7 @@ static constexpr T* span_as(const gsl::span<byte>& span)
     return ((T*)span.data());
 }
 
+template <typename Decoder>
 struct Printer : public Visitor
 {
     bool step_boolean(const TLV& tlv) override
@@ -322,7 +372,6 @@ struct Printer : public Visitor
         return true;
     }
 
-    template <typename Decoder>
     static void run(gsl::span<byte> data);
 
 private:
@@ -348,12 +397,29 @@ private:
 template <typename Decoder>
 struct StructBuilder : public Visitor
 {
+    inline bool safety_checks_passed(const TLV& tlv, Type type, size_t expected_sz,
+                                     const char* name)
+    {
+        if (struct_data_to_fill.size() < expected_sz)
+        {
+            fprintf(stderr, "Struct ended, but ASN1 not done, append: %s\n", name);
+            return false;
+        }
+
+        if (static_cast<Type>(struct_data_to_fill[0]) != type)
+        {
+            fprintf(stderr, "Struct or ASN1 corrupt, found tag: %d in struct and %s in ASN1!\n",
+                    struct_data_to_fill[0], name);
+            return false;
+        }
+
+        return true;
+    }
+
     bool step_boolean(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<boolean>())
+        if (!safety_checks_passed(tlv, static_cast<Type>(0), aligned_sizeof<boolean>(), "boolean"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: %s\n",
-                    typeid(boolean).name());
             return false;
         }
 
@@ -361,14 +427,6 @@ struct StructBuilder : public Visitor
         {
             fprintf(stderr, "TLV data is larger (%zu bytes) than boolean struct field!\n",
                     tlv.data.size());
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != 0)
-        {
-            fprintf(stderr,
-                    "Struct or ASN1 corrupt, found tag: %d in struct and boolean in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -381,10 +439,8 @@ struct StructBuilder : public Visitor
 
     bool step_integer(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<integer>())
+        if (!safety_checks_passed(tlv, static_cast<Type>(0), aligned_sizeof<integer>(), "integer"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: %s\n",
-                    typeid(integer).name());
             return false;
         }
 
@@ -392,14 +448,6 @@ struct StructBuilder : public Visitor
         {
             fprintf(stderr, "TLV data is larger (%zu bytes) than integer struct field!\n",
                     tlv.data.size());
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != 0)
-        {
-            fprintf(stderr,
-                    "Struct or ASN1 corrupt, found tag: %d in struct and integer in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -412,22 +460,14 @@ struct StructBuilder : public Visitor
 
     bool step_oid(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<OID>())
+        if (!safety_checks_passed(tlv, Type::OID, aligned_sizeof<OID>(), "oid"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: oid\n");
             return false;
         }
 
-        if (struct_data_to_fill.empty())
+        if (tlv.data.empty())
         {
             fprintf(stderr, "Invalid oid, length 0\n");
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != static_cast<byte>(Type::OID))
-        {
-            fprintf(stderr, "Struct or ASN1 corrupt, found tag: %d in struct and oid in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -463,6 +503,12 @@ struct StructBuilder : public Visitor
 
     bool step_utc_time(const TLV& tlv) override
     {
+        if (!safety_checks_passed(tlv, static_cast<Type>(0), aligned_sizeof<UTC_time>(),
+                                  "UTC_time"))
+        {
+            return false;
+        }
+
         fprintf(stderr, "utc_time unimplemented!\n");
         struct_data_to_fill <<= aligned_sizeof<UTC_time>();
         return true;
@@ -475,23 +521,16 @@ struct StructBuilder : public Visitor
 
     bool step_bit_string(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<Octet_string>() + aligned_sizeof<integer>())
+        if (!safety_checks_passed(tlv, Type::BIT_STRING,
+                                  aligned_sizeof<Bit_string>() + aligned_sizeof<integer>(),
+                                  "Bit_string"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: bit_string\n");
             return false;
         }
 
         if (tlv.data.size() < 1)
         {
             fprintf(stderr, "Bit string size less than 1!\n");
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != static_cast<byte>(Type::BIT_STRING))
-        {
-            fprintf(stderr,
-                    "Struct or ASN1 corrupt, found tag: %d in struct and Bit_string in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -509,17 +548,9 @@ struct StructBuilder : public Visitor
 
     bool step_octet_string(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<Octet_string>())
+        if (!safety_checks_passed(tlv, Type::OCTET_STRING, aligned_sizeof<Octet_string>(),
+                                  "Octet_string"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: octet_string\n");
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != static_cast<byte>(Type::OCTET_STRING))
-        {
-            fprintf(stderr,
-                    "Struct or ASN1 corrupt, found tag: %d in struct and Octet_string in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -532,18 +563,9 @@ struct StructBuilder : public Visitor
 
     bool step_printable_string(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<Printable_string>())
+        if (!safety_checks_passed(tlv, Type::PRINTABLE_STRING, aligned_sizeof<Printable_string>(),
+                                  "Printable_string"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: printable_string\n");
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != static_cast<byte>(Type::PRINTABLE_STRING))
-        {
-            fprintf(
-                stderr,
-                "Struct or ASN1 corrupt, found tag: %d in struct and Printable_string in ASN1!\n",
-                struct_data_to_fill[0]);
             return false;
         }
 
@@ -556,17 +578,9 @@ struct StructBuilder : public Visitor
 
     bool step_utf8_string(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<Utf8_string>())
+        if (!safety_checks_passed(tlv, Type::UTF8_STRING, aligned_sizeof<Utf8_string>(),
+                                  "Utf8_string"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: Utf8_string\n");
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != static_cast<byte>(Type::UTF8_STRING))
-        {
-            fprintf(stderr,
-                    "Struct or ASN1 corrupt, found tag: %d in struct and Utf8_string in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
@@ -589,22 +603,14 @@ struct StructBuilder : public Visitor
 
     bool step_in_set(const TLV& tlv) override
     {
-        if (struct_data_to_fill.size() < aligned_sizeof<Set>())
+        if (!safety_checks_passed(tlv, Type::SET, aligned_sizeof<Set>(), "Set"))
         {
-            fprintf(stderr, "Struct ended, but ASN1 not done, append: Set\n");
-            return false;
-        }
-
-        if (struct_data_to_fill[0] != static_cast<byte>(Type::SET))
-        {
-            fprintf(stderr, "Struct or ASN1 corrupt, found tag: %d in struct and Set in ASN1!\n",
-                    struct_data_to_fill[0]);
             return false;
         }
 
         // loop over all items in SET
         new (span_as<Set>(struct_data_to_fill)) Set();
-        auto lexer = TLV_lexer(tlv.data);
+        auto lexer = TLVLexer(tlv.data);
 
         while (auto result = lexer.pop<Decoder>())
         {
@@ -638,7 +644,14 @@ bool start_visit(TLV tlv, Visitor& visitor)
     if ((tlv.tag & 0b10000000))
     {
         // fprintf(stderr, "Found context specific tag: 0x%02x\n", tlv.tag);
-        tlv = tlv.value_as_tlv<Decoder>();
+        if (TLVResult result = tlv.value_as_tlv<Decoder>())
+        {
+            tlv = result.unwrap();
+        }
+        else
+        {
+            return false;
+        }
     }
 
     switch (static_cast<Type>(tlv.tag))
@@ -676,7 +689,7 @@ bool start_visit(TLV tlv, Visitor& visitor)
             if (visitor.option_step_in_sequence)
             {
                 // loop over all members of SEQUENCE
-                auto lexer = TLV_lexer(tlv.data);
+                auto lexer = TLVLexer(tlv.data);
                 while (auto result = lexer.pop<Decoder>())
                 {
                     if (!start_visit<Decoder>(*result, visitor)) return false;
@@ -691,7 +704,7 @@ bool start_visit(TLV tlv, Visitor& visitor)
             if (visitor.option_step_in_set)
             {
                 // loop over all items in SET
-                auto lexer = TLV_lexer(tlv.data);
+                auto lexer = TLVLexer(tlv.data);
                 while (auto result = lexer.pop<Decoder>())
                 {
                     if (!start_visit<Decoder>(*result, visitor)) return false;
@@ -709,10 +722,17 @@ bool start_visit(TLV tlv, Visitor& visitor)
 }
 
 template <typename Decoder>
-void Printer::run(gsl::span<byte> data)
+void Printer<Decoder>::run(gsl::span<byte> data)
 {
-    Printer p;
-    start_visit<Decoder>(Decoder::parse(data), p);
+    if (TLVResult result = Decoder::parse(data))
+    {
+        Printer p;
+        start_visit<Decoder>(result.unwrap(), p);
+    }
+    else
+    {
+        fprintf(stderr, "Failed to parse root node: %s", result.unwrap_err().c_str());
+    }
 }
 
 template <typename Decoder>
@@ -726,7 +746,18 @@ std::unique_ptr<T> StructBuilder<Decoder>::build(gsl::span<byte> data)
 
     StructBuilder<Decoder> visitor{gsl::make_span(mem.get(), sizeof(T))};
 
-    if (!start_visit<Decoder>(DER::parse(data), visitor)) return nullptr;
+    if (TLVResult result = Decoder::parse(data))
+    {
+        if (!start_visit<Decoder>(result.unwrap(), visitor))
+        {
+            return nullptr;
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Failed to parse root node: %s", result.unwrap_err().c_str());
+        return nullptr;
+    }
 
     if (!visitor.struct_data_to_fill.empty())
     {
@@ -783,7 +814,7 @@ int main()
                                2,    5,    8,    0x31, 6,    2,    1,    40,   2,    1,    50};
     b[1] = b.size() - 2;
 
-    ASN1::Printer::run<DER>(b);
+    ASN1::Printer<DER>::run(b);
     std::unique_ptr<SampleSeq> ptr = ASN1::StructBuilder<DER>::build<SampleSeq>(b);
 
     if (!ptr)
@@ -869,7 +900,7 @@ int main()
         char filler[2560];
     };
 
-    auto file = DER::parse(bytes);  // unpack file desc
+    auto file = DER::parse(bytes).unwrap();  // unpack file desc
 
     struct DL
     {
@@ -994,7 +1025,7 @@ int main()
         } sequence68;
     };
 
-    ASN1::Printer::run<DER>(file.data);
+    ASN1::Printer<DER>::run(file.data);
     auto dl = ASN1::StructBuilder<DER>::build<DL>(file.data);
 
     struct HashGroup
@@ -1045,7 +1076,7 @@ int main()
     };
 
     // check the hash fields
-    // ASN1::Printer::run<DER>(dl->sequence68.sequence5.octet_string4.data);
+    ASN1::Printer<DER>::run(dl->sequence68.sequence5.octet_string4.data);
     auto a =
         ASN1::StructBuilder<DER>::build<HashGroup>(dl->sequence68.sequence5.octet_string4.data);
 

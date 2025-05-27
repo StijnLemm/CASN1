@@ -21,7 +21,7 @@ auto b = std::vector<byte>{0x30, 0,    2,    1,    6,    2,    1,    9,    2,   
                            2,    5,    8,    0x31, 6,    2,    1,    40,   2,    1,    50};
 b[1] = b.size() - 2;
 
-ASN1::Printer::run<DER>(b);
+ASN1::Printer<DER>::run(b);
 /*
 Outputs:
 struct
